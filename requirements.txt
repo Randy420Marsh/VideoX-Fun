@@ -7,7 +7,8 @@ librosa
 torch>=2.1.2
 torchdiffeq
 torchsde
-decord
+#decord is very old and unmaintained so using decord2
+decord2
 datasets
 numpy
 scikit-image
