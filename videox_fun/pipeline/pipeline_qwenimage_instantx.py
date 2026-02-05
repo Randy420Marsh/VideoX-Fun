@@ -22,26 +22,18 @@ import numpy as np
 import PIL.Image
 import torch
 import torch.nn.functional as F
-import torchvision.transforms.functional as TF
 from diffusers import FlowMatchEulerDiscreteScheduler
-from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
 from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
-from diffusers.loaders import QwenImageLoraLoaderMixin
-from diffusers.models.embeddings import get_1d_rotary_pos_embed
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.utils import (BaseOutput, deprecate, is_torch_xla_available,
                              logging, replace_example_docstring)
 from diffusers.utils.torch_utils import randn_tensor
-from diffusers.video_processor import VideoProcessor
-from einops import rearrange
-from PIL import Image
 
 from ..models import (AutoencoderKLQwenImage,
                       Qwen2_5_VLForConditionalGeneration, Qwen2Tokenizer,
-                      QwenImageInstantXControlNetModel, QwenImageTransformer2DModel,
-                      T5Tokenizer)
-
+                      QwenImageInstantXControlNetModel,
+                      QwenImageTransformer2DModel, T5Tokenizer)
 
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
@@ -162,7 +154,7 @@ class QwenImagePipelineOutput(BaseOutput):
     images: Union[List[PIL.Image.Image], np.ndarray]
 
 
-class QwenImageControlNetPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
+class QwenImageControlNetPipeline(DiffusionPipeline):
     r"""
     The QwenImage pipeline for text-to-image generation.
 
@@ -788,7 +780,7 @@ class QwenImageControlNetPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
                 1.0 - float(i / len(timesteps) < s or (i + 1) / len(timesteps) > e)
                 for s, e in zip(control_guidance_start, control_guidance_end)
             ]
-            controlnet_keep.append(keeps[0] if isinstance(self.controlnet, QwenImageInstantXControlNetModel) else keeps)
+            controlnet_keep.append(keeps[0])
 
         # handle guidance
         if self.transformer.config.guidance_embeds and guidance_scale is None:
@@ -874,8 +866,8 @@ class QwenImageControlNetPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
                 )
 
                 with torch.cuda.amp.autocast(dtype=latents.dtype), torch.cuda.device(device=latents.device):
-                    noise_pred = self.transformer.forward_bs(
-                        x=latent_model_input,
+                    noise_pred = self.transformer(
+                        hidden_states=latent_model_input,
                         timestep=timestep / 1000,
                         guidance=guidance,
                         encoder_hidden_states=prompt_embeds_input,

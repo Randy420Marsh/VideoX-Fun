@@ -1,11 +1,8 @@
 import os
 import sys
 
-import numpy as np
 import torch
 from diffusers import FlowMatchEulerDiscreteScheduler
-from omegaconf import OmegaConf
-from PIL import Image
 
 current_file_path = os.path.abspath(__file__)
 project_roots = [os.path.dirname(current_file_path), os.path.dirname(os.path.dirname(current_file_path)), os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))]
@@ -13,18 +10,15 @@ for project_root in project_roots:
     sys.path.insert(0, project_root) if project_root not in sys.path else None
 
 from videox_fun.dist import set_multi_gpus_devices, shard_model
-from videox_fun.models import (AutoencoderKL, AutoTokenizer,
-                               Qwen3ForCausalLM, ZImageControlTransformer2DModel)
+from videox_fun.models import (AutoencoderKL, AutoTokenizer, Qwen3ForCausalLM,
+                               ZImageTransformer2DModel)
 from videox_fun.models.cache_utils import get_teacache_coefficients
-from videox_fun.pipeline import ZImageControlPipeline
+from videox_fun.pipeline import ZImagePipeline
 from videox_fun.utils.fm_solvers import FlowDPMSolverMultistepScheduler
 from videox_fun.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from videox_fun.utils.fp8_optimization import (convert_model_weight_to_float8,
                                                convert_weight_dtype_wrapper)
 from videox_fun.utils.lora_utils import merge_lora, unmerge_lora
-from videox_fun.utils.utils import (filter_kwargs, get_image_to_video_latent, get_image_latent, get_image,
-                                    get_video_to_video_latent,
-                                    save_videos_grid)
 
 # GPU memory mode, which can be chosen in [model_full_load, model_full_load_and_qfloat8, model_cpu_offload, model_cpu_offload_and_qfloat8, sequential_cpu_offload].
 # model_full_load means that the entire model will be moved to the GPU.
@@ -53,8 +47,6 @@ fsdp_text_encoder   = False
 # The compile_dit is not compatible with the fsdp_dit and sequential_cpu_offload.
 compile_dit         = False
 
-# Config and model path
-config_path         = "config/z_image/z_image_control_2.1_lite.yaml"
 # model path
 model_name          = "models/Diffusion_Transformer/Z-Image-Turbo"
 
@@ -62,40 +54,32 @@ model_name          = "models/Diffusion_Transformer/Z-Image-Turbo"
 sampler_name        = "Flow"
 
 # Load pretrained model if need
-transformer_path    = "models/Personalized_Model/Z-Image-Turbo-Fun-Controlnet-Tile-2.1-lite-2601-8steps.safetensors" 
+transformer_path    = None
 vae_path            = None
 lora_path           = None
 
 # Other params
-sample_size         = [1328, 1328]
+sample_size         = [1728, 992]
 
 # Use torch.float16 if GPU does not support torch.bfloat16
 # ome graphics cards, such as v100, 2080ti, do not support torch.bfloat16
 weight_dtype        = torch.bfloat16
-control_image       = "asset/low_res.png"
-# The inpaint_image and mask_image is useless in tile model, just set them to None.
-inpaint_image       = None
-mask_image          = None
-control_context_scale = 0.85
-
 # Please use as detailed a prompt as possible to describe the object that needs to be generated.
-prompt              = "这是一张充满都市气息的户外人物肖像照片。画面中是一位年轻男性，他展现出时尚而自信的形象。人物拥有精心打理的短发发型，两侧修剪得较短，顶部保留一定长度，呈现出流行的Undercut造型。他佩戴着一副时尚的浅色墨镜或透明镜框眼镜，为整体造型增添了潮流感。脸上洋溢着温和友善的笑容，神情放松自然，给人以阳光开朗的印象。他身穿一件经典的牛仔外套，这件单品永不过时，展现出休闲又有型的穿衣风格。牛仔外套的蓝色调与整体氛围十分协调，领口处隐约可见内搭的衣物。照片的背景是典型的城市街景，可以看到模糊的建筑物、街道和行人，营造出繁华都市的氛围。背景经过了恰当的虚化处理，使人物主体更加突出。光线明亮而柔和，可能是白天的自然光，为照片带来清新通透的视觉效果。整张照片构图专业，景深控制得当，完美捕捉了一个现代都市年轻人充满活力和自信的瞬间，展现出积极向上的生活态度。"
+prompt              = "一位年轻女子站在阳光明媚的海岸线上，白裙在轻拂的海风中微微飘动。她拥有一头鲜艳的紫色长发，在风中轻盈舞动，发间系着一个精致的黑色蝴蝶结，与身后柔和的蔚蓝天空形成鲜明对比。她面容清秀，眉目精致，透着一股甜美的青春气息；神情柔和，略带羞涩，目光静静地凝望着远方的地平线，双手自然交叠于身前，仿佛沉浸在思绪之中。在她身后，是辽阔无垠、波光粼粼的大海，阳光洒在海面上，映出温暖的金色光晕。"
 negative_prompt     = " "
 guidance_scale      = 0.00
 seed                = 43
-num_inference_steps = 8
+num_inference_steps = 9
 lora_weight         = 0.55
-save_path           = "samples/z-image-t2i-control"
+save_path           = "samples/z-image-t2i"
 
 device = set_multi_gpus_devices(ulysses_degree, ring_degree)
-config = OmegaConf.load(config_path)
 
-transformer = ZImageControlTransformer2DModel.from_pretrained(
+transformer = ZImageTransformer2DModel.from_pretrained(
     model_name, 
     subfolder="transformer",
     low_cpu_mem_usage=True,
     torch_dtype=weight_dtype,
-    transformer_additional_kwargs=OmegaConf.to_container(config['transformer_additional_kwargs']),
 ).to(weight_dtype)
 
 if transformer_path is not None:
@@ -148,7 +132,7 @@ scheduler = Chosen_Scheduler.from_pretrained(
     subfolder="scheduler"
 )
 
-pipeline = ZImageControlPipeline(
+pipeline = ZImagePipeline(
     vae=vae,
     tokenizer=tokenizer,
     text_encoder=text_encoder,
@@ -176,13 +160,13 @@ if compile_dit:
 if GPU_memory_mode == "sequential_cpu_offload":
     pipeline.enable_sequential_cpu_offload(device=device)
 elif GPU_memory_mode == "model_cpu_offload_and_qfloat8":
-    convert_model_weight_to_float8(transformer, exclude_module_name=["img_in", "txt_in", "timestep"], device=device)
+    convert_model_weight_to_float8(transformer, exclude_module_name=["x_pad_token", "cap_pad_token"], device=device)
     convert_weight_dtype_wrapper(transformer, weight_dtype)
     pipeline.enable_model_cpu_offload(device=device)
 elif GPU_memory_mode == "model_cpu_offload":
     pipeline.enable_model_cpu_offload(device=device)
 elif GPU_memory_mode == "model_full_load_and_qfloat8":
-    convert_model_weight_to_float8(transformer, exclude_module_name=["img_in", "txt_in", "timestep"], device=device)
+    convert_model_weight_to_float8(transformer, exclude_module_name=["x_pad_token", "cap_pad_token"], device=device)
     convert_weight_dtype_wrapper(transformer, weight_dtype)
     pipeline.to(device=device)
 else:
@@ -194,31 +178,13 @@ if lora_path is not None:
     pipeline = merge_lora(pipeline, lora_path, lora_weight, device=device, dtype=weight_dtype)
 
 with torch.no_grad():
-    if inpaint_image is not None:
-        inpaint_image = get_image_latent(inpaint_image, sample_size=sample_size)[:, :, 0]
-    else:
-        inpaint_image = torch.zeros([1, 3, sample_size[0], sample_size[1]])
-
-    if mask_image is not None:
-        mask_image = get_image_latent(mask_image, sample_size=sample_size)[:, :1, 0]
-    else:
-        mask_image = torch.ones([1, 1, sample_size[0], sample_size[1]]) * 255
-
-    if control_image is not None:
-        control_image = get_image_latent(control_image, sample_size=sample_size)[:, :, 0]
-
     sample = pipeline(
         prompt      = prompt, 
-        negative_prompt = negative_prompt,
         height      = sample_size[0],
         width       = sample_size[1],
         generator   = generator,
         guidance_scale = guidance_scale,
-        image               = inpaint_image,
-        mask_image          = mask_image,
-        control_image       = control_image,
         num_inference_steps = num_inference_steps,
-        control_context_scale = control_context_scale,
     ).images
 
 if lora_path is not None:

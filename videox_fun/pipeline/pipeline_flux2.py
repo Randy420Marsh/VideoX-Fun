@@ -621,11 +621,13 @@ class Flux2Pipeline(DiffusionPipeline):
         self,
         image: Optional[Union[List[PIL.Image.Image], PIL.Image.Image]] = None,
         prompt: Union[str, List[str]] = None,
+        negative_prompt: Union[str, List[str]] = None,
         height: Optional[int] = None,
         width: Optional[int] = None,
         num_inference_steps: int = 50,
         sigmas: Optional[List[float]] = None,
         guidance_scale: Optional[float] = 4.0,
+        true_cfg_scale: Optional[float] = 1.0,
         num_images_per_prompt: int = 1,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.Tensor] = None,
@@ -637,6 +639,7 @@ class Flux2Pipeline(DiffusionPipeline):
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 512,
         text_encoder_out_layers: Tuple[int] = (10, 20, 30),
+        comfyui_progressbar: bool = False,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -733,6 +736,11 @@ class Flux2Pipeline(DiffusionPipeline):
             batch_size = prompt_embeds.shape[0]
 
         device = self._execution_device
+        has_neg_prompt = negative_prompt is not None
+        do_true_cfg = true_cfg_scale > 1 and has_neg_prompt
+        if comfyui_progressbar:
+            from comfy.utils import ProgressBar
+            pbar = ProgressBar(num_inference_steps + 2)
 
         # 3. prepare text embeddings
         prompt_embeds, text_ids = self.encode_prompt(
@@ -743,6 +751,15 @@ class Flux2Pipeline(DiffusionPipeline):
             max_sequence_length=max_sequence_length,
             text_encoder_out_layers=text_encoder_out_layers,
         )
+        if do_true_cfg:
+            negative_prompt_embeds, negative_text_ids = self.encode_prompt(
+                prompt=negative_prompt,
+                prompt_embeds=None,
+                device=device,
+                num_images_per_prompt=num_images_per_prompt,
+                max_sequence_length=max_sequence_length,
+                text_encoder_out_layers=text_encoder_out_layers,
+            )
 
         # 4. process images
         if image is not None and not isinstance(image, list):
@@ -783,6 +800,8 @@ class Flux2Pipeline(DiffusionPipeline):
             generator=generator,
             latents=latents,
         )
+        if comfyui_progressbar:
+            pbar.update(1)
 
         image_latents = None
         image_latent_ids = None
@@ -815,6 +834,9 @@ class Flux2Pipeline(DiffusionPipeline):
         guidance = torch.full([1], guidance_scale, device=device, dtype=torch.float32)
         guidance = guidance.expand(latents.shape[0])
 
+        if comfyui_progressbar:
+            pbar.update(1)
+
         # 7. Denoising loop
         # We set the index here to remove DtoH sync, helpful especially during compilation.
         # Check out more details here: https://github.com/huggingface/diffusers/pull/11696
@@ -845,8 +867,21 @@ class Flux2Pipeline(DiffusionPipeline):
                     joint_attention_kwargs=self._attention_kwargs,
                     return_dict=False,
                 )[0]
-
                 noise_pred = noise_pred[:, : latents.size(1) :]
+
+                if do_true_cfg:
+                    neg_noise_pred = self.transformer(
+                        hidden_states=latent_model_input,  # (B, image_seq_len, C)
+                        timestep=timestep / 1000,
+                        guidance=guidance,
+                        encoder_hidden_states=negative_prompt_embeds,
+                        txt_ids=negative_text_ids,  # B, text_seq_len, 4
+                        img_ids=latent_image_ids,  # B, image_seq_len, 4
+                        joint_attention_kwargs=self._attention_kwargs,
+                        return_dict=False,
+                    )[0]
+                    neg_noise_pred = neg_noise_pred[:, : latents.size(1) :]
+                    noise_pred = neg_noise_pred + true_cfg_scale * (noise_pred - neg_noise_pred)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
@@ -873,12 +908,14 @@ class Flux2Pipeline(DiffusionPipeline):
                 if XLA_AVAILABLE:
                     xm.mark_step()
 
+                if comfyui_progressbar:
+                    pbar.update(1)
+
         self._current_timestep = None
 
         if output_type == "latent":
             image = latents
         else:
-            torch.save({"pred": latents}, "pred_d.pt")
             latents = self._unpack_latents_with_ids(latents, latent_ids)
 
             latents_bn_mean = self.vae.bn.running_mean.view(1, -1, 1, 1).to(latents.device, latents.dtype)

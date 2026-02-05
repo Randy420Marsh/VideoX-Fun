@@ -2,17 +2,21 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) Alibaba, Inc. and its affiliates.
 
+from math import prod
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 from diffusers.configuration_utils import register_to_config
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
-from diffusers.utils import (USE_PEFT_BACKEND, is_torch_version,
+from diffusers.utils import (USE_PEFT_BACKEND, is_torch_version, logging,
                              scale_lora_layers, unscale_lora_layers)
 
+from ..utils import cfg_skip
 from .qwenimage_transformer2d import (QwenImageTransformer2DModel,
                                       QwenImageTransformerBlock)
+
+logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
 class QwenImageControlTransformerBlock(QwenImageTransformerBlock):
@@ -161,6 +165,7 @@ class QwenImageControlTransformer2DModel(QwenImageTransformer2DModel):
         hints = torch.unbind(c)[:-1]
         return hints
 
+    @cfg_skip()
     def forward(
         self,
         hidden_states: torch.Tensor,
